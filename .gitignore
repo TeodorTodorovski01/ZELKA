@@ -1,0 +1,26 @@
+# LaTeX помошни фајлови
+*.aux
+*.log
+*.toc
+*.mtc
+*.out
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.lof
+*.lot
+*.nav
+*.snm
+*.vrb
+*.xdv
+_minted*/
+
+# компајлиран PDF (се прави локално/на платформата)
+*.pdf
+
+# системски
+.DS_Store
+Thumbs.db
+build/

@@ -1,0 +1,509 @@
+%%% Laboratory	 Notes
+%%% Template by Mikhail Klassen, April 2013
+%%% Contributions from Sarah Mount, May 2014
+\documentclass[a4paper]{tufte-handout}
+
+% Поддршка за кирилица (pdflatex)
+\usepackage[utf8]{inputenc}
+\usepackage[T2A]{fontenc}
+
+% Целосна ширина на листот: еднакви леви и десни маргини (без маргинска колона на tufte)
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=3cm, marginparwidth=1cm, marginparsep=0.3cm}
+
+\newcommand{\workingDate}{Октомври $|$ 2026}
+\newcommand{\userName}{Теодор Тодоровски}
+\newcommand{\institution}{АСИ ФЕИТ}
+
+\usepackage{lab_notes}
+
+\usepackage{hyperref}
+\hypersetup{
+    pdffitwindow=false,            % window fit to page
+    pdfstartview={Fit},            % fits width of page to window
+    pdftitle={водич за дружба со Жејко},     % document title
+    pdfauthor={Теодор Тодоровски}, % author name
+    pdfsubject={TurtleBot 4, ROS 2 Jazzy, SSH, teleop, dock, камера},
+    pdfnewwindow=true,             % links in new window
+    colorlinks=true,               % coloured links, not boxed
+    linkcolor=DarkScarletRed,      % colour of internal links
+    citecolor=DarkChameleon,       % colour of links to bibliography
+    filecolor=DarkPlum,            % colour of file links
+    urlcolor=DarkSkyBlue           % colour of external links
+}
+% Автоматска нумерација на табели
+\usepackage{caption}
+\renewcommand{\tablename}{Табела}
+\captionsetup[table]{
+    labelsep=colon,
+    justification=centering,
+    font=small
+}
+\renewcommand{\thetable}{\arabic{table}}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% АВТОРИ
+%% За повеќе автори додади ги во \author со нивен индекс:
+%%   Име Презиме\textsuperscript{1}, Име Презиме\textsuperscript{2}
+%% и во легендата по \maketitle.
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\title{водич за дружба со Жејко}
+\author{Теодор Тодоровски\textsuperscript{1}}
+\date{2026}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%% СОДРЖИНА (сопствена, независна од tufte/lab_notes)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\makeatletter
+% изглед на редовите: глава (задебелено) и потсекција (вовлечено)
+\newcommand*{\l@mtcglava}[2]{%
+  \addvspace{0.6em}%
+  \begingroup\bfseries\@dottedtocline{1}{0em}{0em}{#1}{#2}\endgroup}
+\newcommand*{\l@mtcpod}[2]{%
+  \@dottedtocline{2}{1.5em}{0em}{#1}{#2}}
+\newcommand{\mojasodrzina}{%
+  \begingroup
+  \setcounter{tocdepth}{9}%
+  \def\@pnumwidth{1.6em}\def\@tocrmarg{2.6em}\def\@dotsep{4.5}%
+  \noindent{\Large\bfseries Содржина}\par\medskip
+  \@starttoc{mtc}%
+  \endgroup}
+\makeatother
+
+% Глава со индекс на авторот + запис во содржината
+% Употреба: \glava{Наслов}{индекс}  (повеќе автори: {1,2})
+\newcommand{\glava}[2]{%
+  \phantomsection
+  \newday{#1\textsuperscript{#2}}%
+  \addcontentsline{mtc}{mtcglava}{\texorpdfstring{#1\textsuperscript{#2}}{#1 (#2)}}%
+}
+
+% Потсекција со индекс на авторот + запис во содржината
+% Употреба: \potglava{1.3 Наслов}{индекс}  (повеќе автори: {1,2})
+\newcommand{\potglava}[2]{%
+  \phantomsection
+  \subsection*{#1\textsuperscript{#2}}%
+  \addcontentsline{mtc}{mtcpod}{\texorpdfstring{#1\textsuperscript{#2}}{#1 (#2)}}%
+}
+
+\usepackage{listings}
+\usepackage{xcolor}
+
+\renewcommand{\lstlistingname}{Команда}
+
+\definecolor{codebackground}{RGB}{250,250,250}
+\definecolor{codeframe}{RGB}{250,250,250}
+
+\lstset{
+    backgroundcolor=\color{codebackground},
+    frame=single,
+    rulecolor=\color{codeframe},
+    basicstyle=\ttfamily\small,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    breaklines=true,
+    xleftmargin=1em,
+    framexleftmargin=1em
+}
+\begin{document}
+\maketitle
+
+% Легенда на авторите
+\begin{center}\small
+\textsuperscript{1}~Теодор Тодоровски \\
+Бројот зад насловот на секоја глава го означува нејзиниот автор.
+\end{center}
+
+\mojasodrzina
+\clearpage
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+	\begin{description}
+		\item [TurtleBot 4] Далечинско управување преку SSH со \textbf{ROS 2 Jazzy}: возење со тастатура, докирање и стримање на камерата.
+	\end{description}
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%  ПОГЛАВЈЕ 1: Работа преку SSH (досегашните точки 1-7)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\glava{1. Работа со роботот преку SSH}{1}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{1.1 Основни податоци}{1}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Податок & Вредност \\
+\midrule
+Робот & TurtleBot 4 (Create 3 база, OAK-D камера) \\
+IP на роботот & \texttt{192.168.1.110} (\texttt{hostname -I}) \\
+Корисник & \texttt{ubuntu} (лозинка: \texttt{turtlebot4}, ако не е менувана) \\
+Систем & Ubuntu 24.04 (Noble) \\
+ROS 2 & \textbf{Jazzy}  \\
+\bottomrule
+\end{tabular}
+\captionof{table}{Основни податоци за роботот}
+\label{tab:osnovni}
+\end{center}
+
+\newthought{Важно:} во сите \texttt{apt} наредби користи \texttt{ros-jazzy-...}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{1.2 Поврзување со SSH (користење на нативниот ROS)}{1}
+
+Отвори терминал на компјутерот (Linux: \texttt{Ctrl+Alt+T}, Windows: PowerShell):
+
+\begin{lstlisting}[caption={Проверка на мрежната конекција}, label={cmd:ping}]
+ping 192.168.1.110
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Поврзување со Жејко преку SSH}, label={cmd:ssh}]
+ssh ubuntu@192.168.1.110
+# Лозинка: turtlebot4
+\end{lstlisting}
+
+За различните сервиси (лидар, движење, камера \ldots) потребно е истовремено да бидат отворени повеќе терминали на компјутерот. Во секој нов терминал се извршува наредбата за SSH од Команда~\ref{cmd:ssh}, а потоа во ROS се стартува соодветниот сервис.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{1.3 Возење со тастатура}{1}
+
+Ако роботот е на докот, може да биде извадена со:
+\begin{lstlisting}[caption={Вадење на роботот од докот (undock)}, label={cmd:undock}]
+ros2 action send_goal /undock irobot_create_msgs/action/Undock "{}"
+\end{lstlisting}
+{\scriptsize Забелешка: во теорија ова е доволно, но во пракса понекогаш нема реакција на оваа наредба. Тогаш роботот се вади од докот рачно, преку опцијата „undock“ на самиот робот.}
+
+\begin{lstlisting}[caption={Движење со тастатура}, label={cmd:drive}]
+ros2 run teleop_twist_keyboard teleop_twist_keyboard
+\end{lstlisting}
+
+Ако пакетот не е пронајден, инсталирај го:
+\begin{lstlisting}[caption={Инсталација на teleop\_twist\_keyboard}, label={cmd:teleop-install}]
+sudo apt update
+sudo apt install ros-jazzy-teleop-twist-keyboard
+\end{lstlisting}
+
+Курсорот мора да е во тој терминал. Почни со мала брзина (\texttt{z} неколку пати).
+
+\begin{center}
+
+\begin{tabular}{ll}
+\toprule
+Копче & Акција \\
+\midrule
+\texttt{i} & напред \\
+\texttt{,} & назад \\
+\texttt{j} / \texttt{l} & ротација лево / десно \\
+\texttt{u} / \texttt{o} & напред + завивање лево / десно \\
+\texttt{m} / \texttt{.} & назад + завивање \\
+\texttt{k} & стоп \\
+\texttt{q} / \texttt{z} & зголеми / намали брзина \\
+\bottomrule
+\end{tabular}
+\captionof{table}{Команди за управување со TurtleBot 4 преку тастатура}
+\label{tab:keyboard}
+\end{center}
+
+{\scriptsize Забелешка: роботот не сака да вози наназад (рикверц). Исто така, при зголемување на брзината со \texttt{q}, роботот оди напред и сам го „демпфира“ зголемувањето.}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{1.4 Враќање на докот}{1}
+
+\begin{lstlisting}[caption={Враќање на роботот на докот (dock)}, label={cmd:dock}]
+ros2 action send_goal /dock irobot_create_msgs/action/Dock "{}"
+\end{lstlisting}
+Со namespace: \texttt{/robot1/dock}.
+
+\newthought{Услови за успех:}
+\begin{itemize}
+	\item Докот е вклучен (светло на докот).
+	\item Роботот е околу 1--2 m пред докот, свртен кон него (го лови со IR сензори).
+	\item Правилен namespace.
+\end{itemize}
+
+Провери дали го гледа докот:
+\begin{lstlisting}[caption={Проверка на видливоста на докот}, label={cmd:dockstatus}]
+ros2 topic echo /dock_status --once
+\end{lstlisting}
+Ако пишува \texttt{dock\_visible: false}, проблемот е видливост, не наредбата.
+
+\newthought{Што се случи кај нас:} роботот не се врати сам, па го вративме рачно. Решение: приближи го со teleop кон докот и пушти ја наредбата пак (Команда~\ref{cmd:dock}). Ако се заглави, прекини со \texttt{Ctrl+C}.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{1.5 Камера (како IP камера)}{1}
+
+Камерата објавува слика како ROS 2 теми:
+\begin{lstlisting}[caption={Проверка на темите од камерата}, label={cmd:topics}]
+ros2 topic list | grep oakd
+ros2 topic hz /oakd/rgb/preview/image_raw
+\end{lstlisting}
+Главни теми: \texttt{/oakd/rgb/preview/image\_raw} и \texttt{/oakd/rgb/image\_raw/compressed} (помалку мрежен сообраќај). Ако нема \texttt{oakd} теми:
+\begin{lstlisting}[caption={Стартување на OAK-D камерата}, label={cmd:oakd}]
+ros2 launch turtlebot4_bringup oakd.launch.py
+\end{lstlisting}
+
+\paragraph{Опција А: веб стрим во browser (најпросто).}
+
+На роботот:
+\begin{lstlisting}[caption={Стартување на web\_video\_server}, label={cmd:webserver}]
+ros2 run web_video_server web_video_server
+\end{lstlisting}
+Во browser на компјутерот (иста мрежа):
+\begin{lstlisting}[caption={Адреси за веб стрим}, label={cmd:weburl}]
+http://192.168.1.110:8080
+http://192.168.1.110:8080/stream?topic=/oakd/rgb/preview/image_raw
+\end{lstlisting}
+За помала латенција додади \texttt{\&width=640\&height=480\&quality=50} на крајот од URL-то.
+
+\paragraph{Опција Б: rqt\_image\_view на компјутерот.}
+
+\begin{lstlisting}[caption={Инсталација и стартување на rqt\_image\_view}, label={cmd:rqt}]
+sudo apt install ros-jazzy-rqt-image-view
+ros2 run rqt_image_view rqt_image_view
+\end{lstlisting}
+Услови: ист \texttt{ROS\_DOMAIN\_ID} како на роботот (\texttt{echo \$ROS\_DOMAIN\_ID}), иста мрежа, графички интерфејс. Ако роботот користи Discovery Server:
+\begin{lstlisting}[caption={Поставување на Discovery Server}, label={cmd:discovery}]
+export ROS_DISCOVERY_SERVER=192.168.1.110:11811
+export ROS_SUPER_CLIENT=true
+ros2 daemon stop
+ros2 topic list
+\end{lstlisting}
+{\scriptsize Забелешка: при тестирањето во поглавје 2 на роботот \texttt{ROS\_DISCOVERY\_SERVER} беше празно, односно Discovery Server не се користи.}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{1.6 Чести проблеми и решенија}{1}
+
+\begin{description}
+	\item [\texttt{Unable to locate package ros-humble-...}] Роботот има Jazzy. Користи \texttt{ros-jazzy-...}.
+	\item [\texttt{bind: Address already in use} (порт 8080)] \texttt{web\_video\_server} веќе работи. Не го пуштај пак, отвори \texttt{http://192.168.1.110:8080}. Или рестартирај со \texttt{pkill -f web\_video\_server}, или користи друг порт: \texttt{--ros-args -p port:=8081}.
+	\item [Кој го држи портот] Види Команда~\ref{cmd:port}.
+	\item [\texttt{pkill} не помага] Веројатно работи како сервис, види Команда~\ref{cmd:service}.
+	\item [\texttt{rqt\_image\_view}: Process exited with failure 1] Причината не е утврдена (domain ID, discovery server или нема display). Користи го веб стримот, или провери \texttt{ROS\_DOMAIN\_ID} и \texttt{ros2 topic list} на компјутерот.
+	\item [Роботот не се движи] Не е извадена од докот или погрешен namespace. Направи undock и провери \texttt{ros2 topic list}.
+	\item [Роботот не се докира] Док без струја или роботот не го гледа. Види точка 1.4.
+\end{description}
+
+\begin{lstlisting}[caption={Проверка кој процес го држи портот 8080}, label={cmd:port}]
+sudo ss -tlnp | grep 8080
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Проверка дали web\_video\_server работи како сервис}, label={cmd:service}]
+systemctl list-units | grep -i -E "video|turtlebot|ros"
+\end{lstlisting}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{1.7 Брз редослед}{1}
+
+\begin{enumerate}
+	\item Поврзи се: \texttt{ssh ubuntu@192.168.1.110} (Команда~\ref{cmd:ssh})
+	\item Undock: Команда~\ref{cmd:undock}
+	\item Вози: Команда~\ref{cmd:drive}
+	\item Камера: отвори \url{http://192.168.1.110:8080} (серверот можеби веќе работи, Команда~\ref{cmd:webserver})
+	\item Врати: приближи го до докот, па Команда~\ref{cmd:dock}
+\end{enumerate}
+
+\hrulefill
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%  ПОГЛАВЈЕ 2: ROS од компјутерот (podman контејнер)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\glava{2. Поврзување на ROS од компјутерот (podman контејнер) со роботот}{1}
+
+Наместо сите ROS команди да се извршуваат преку SSH врз самиот робот, поголемиот дел од работата (теleop, визуелизација, SLAM, навигација) може да се извршува на компјутерот, а роботот да ги објавува темите преку мрежа. Ова поглавје ги бележи направените подготовки, обидите што успеаја и оние што не, со цел следниот обид да не почнува од нула.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{2.1 Поставеност}{1}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Податок & Вредност \\
+\midrule
+Компјутер & Fedora, ROS 2 Jazzy во podman контејнер \\
+IP на компјутерот & \texttt{192.168.1.108} (\texttt{hostname -I} во контејнерот) \\
+IP на роботот & \texttt{192.168.1.110} (иста подмрежа) \\
+\texttt{ROS\_DOMAIN\_ID} & \texttt{0} (на роботот и во контејнерот) \\
+RMW & \texttt{rmw\_fastrtps\_cpp} (Fast DDS) на двете страни \\
+Откривање (discovery) & \texttt{ROS\_AUTOMATIC\_DISCOVERY\_RANGE=SUBNET}, без Discovery Server \\
+Fast DDS профил на роботот & \texttt{/etc/turtlebot4/fastdds\_rpi.xml} (празен, стандарден) \\
+\bottomrule
+\end{tabular}
+\captionof{table}{Поставеност на компјутерот и роботот}
+\label{tab:postavenost}
+\end{center}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{2.2 Подготовка на контејнерот}{1}
+
+\begin{itemize}
+	\item \textbf{Иста дистрибуција.} Контејнерот и роботот мора да користат ист ROS: \texttt{printenv ROS\_DISTRO} дава \texttt{jazzy} на двете страни.
+	\item \textbf{Host networking.} Контејнерот мора да е стартуван со \texttt{--network=host}, инаку откривањето (multicast) не стигнува до роботот. Проверка од контејнерот: \texttt{hostname -I} мора да покаже вистинска LAN адреса (\texttt{192.168.1.108}), не приватна podman адреса (\texttt{10.0.2.x} или \texttt{10.88.x.x}). Командата \texttt{podman ps} се извршува на \emph{хостот} (Fedora), не во контејнерот.
+	\item \textbf{Ист домејн.} \texttt{ROS\_DOMAIN\_ID} мора да е ист на двете страни (Команда~\ref{cmd:domain}).
+\end{itemize}
+
+\begin{lstlisting}[caption={Поставување на домејнот во контејнерот}, label={cmd:domain}]
+sed -i '/ROS_DOMAIN_ID/d' ~/.bashrc
+echo 'export ROS_DOMAIN_ID=0' >> ~/.bashrc
+source ~/.bashrc
+echo $ROS_DOMAIN_ID
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Инсталација на teleop во контејнерот}, label={cmd:ctr-teleop}]
+apt update
+apt install -y ros-jazzy-teleop-twist-keyboard
+\end{lstlisting}
+
+{\scriptsize Забелешка: пакетите инсталирани со \texttt{apt} во контејнерот се губат ако контејнерот се создаде одново. За трајно решение додај ги во Containerfile на сликата.}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{2.3 Што успеа}{1}
+
+\begin{itemize}
+	\item Истата дистрибуција (\texttt{jazzy}) и ист RMW на роботот и во контејнерот.
+	\item Контејнерот е на host мрежа (\texttt{192.168.1.108}), а роботот е на \texttt{192.168.1.110}, во иста подмрежа.
+	\item Ping од роботот до компјутерот: 0\% загуба (два до десет милисекунди).
+	\item \texttt{ros2 topic list} во контејнерот ги покажува темите на роботот (\texttt{/cmd\_vel}, \texttt{/scan}, \texttt{/odom}, \texttt{/imu}, \texttt{/battery\_state}, \texttt{/dock\_status}, \texttt{/oakd/rgb/preview/image\_raw} итн.), значи автоматското откривање работи.
+	\item \texttt{ros2 topic info /odom -v} во контејнерот го гледа издавачот \texttt{create3\_repub}.
+	\item Тест со обична порака (\texttt{std\_msgs/String}) помеѓу контејнерот и роботот поминува во \emph{двете} насоки, и со вклучен и со исклучен firewall на Fedora (Команда~\ref{cmd:hitest}).
+	\item На самиот робот (SSH сесија) \texttt{/odom} и \texttt{/battery\_state} објавуваат податоци (батерија 57\%, роботот е на полначот).
+\end{itemize}
+
+\begin{lstlisting}[caption={Тест на комуникацијата во двете насоки}, label={cmd:hitest}]
+# контејнер:
+ros2 topic pub /test std_msgs/msg/String "{data: hi}"
+# робот (SSH):
+ros2 topic echo /test
+# и обратно: pub на роботот, echo во контејнерот
+\end{lstlisting}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{2.4 Што не успеа}{1}
+
+\begin{itemize}
+	\item \texttt{ros2 topic echo /odom} и \texttt{/battery\_state} во контејнерот не прикажуваат податоци, иако на роботот истите команди работат (и со \texttt{--qos-reliability best\_effort}).
+	\item Рестарт на ROS daemon (\texttt{ros2 daemon stop}) и експлицитно поставување на \texttt{RMW\_IMPLEMENTATION=rmw\_fastrtps\_cpp}: без промена.
+	\item Fast DDS профил само со UDP транспорт во контејнерот (Команда~\ref{cmd:udp}): поставен е (\texttt{FASTRTPS\_DEFAULT\_PROFILES\_FILE=/root/udp\_only.xml}), но податоците од темите на роботот сè уште не пристигнаа.
+	\item Привремено исклучување на \texttt{firewalld} на Fedora: без промена, па firewall не е причината.
+	\item Тестовите на \texttt{/imu} и \texttt{/scan} со \texttt{--qos-reliability reliable --qos-durability transient\_local} дадоа предупредувања за некомпатибилен QoS. Ова беше погрешна комбинација (види 2.5), па тестот не кажува ништо за врската.
+\end{itemize}
+
+\begin{lstlisting}[caption={Fast DDS профил само со UDP (во контејнерот)}, label={cmd:udp}]
+cat > /root/udp_only.xml <<'EOF'
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_only</transport_id>
+      <type>UDPv4</type>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="udp_participant" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>udp_only</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>
+EOF
+export FASTRTPS_DEFAULT_PROFILES_FILE=/root/udp_only.xml
+ros2 daemon stop
+\end{lstlisting}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{2.5 Грешки и недоразбирања по пат}{1}
+
+\begin{center}
+\begin{tabular}{p{4cm}p{5.5cm}p{5cm}}
+\toprule
+Симптом & Причина & Решение \\
+\midrule
+Пакети \texttt{turtlebot3\_*}, \texttt{TURTLEBOT3\_MODEL} & Роботот е TurtleBot \textbf{4} (хостнејм \texttt{turtlebot4}, пакети \texttt{turtlebot4\_*}), не TurtleBot 3 & TB3 пакетите не се потребни. Не се стартува bringup, стекот на роботот веќе работи по подигање \\
+\texttt{ROS\_DOMAIN\_ID=30} & 30 е стандардот кај TB3, а роботот користи 0 & Контејнерот се менува на 0 (Команда~\ref{cmd:domain}) \\
+Нема излез од \texttt{echo}, предупредување \texttt{incompatible QoS ... RELIABILITY} & \texttt{echo} по стандард е \texttt{RELIABLE}, а \texttt{/odom} од \texttt{robot\_state} е \texttt{BEST\_EFFORT} & \texttt{--qos-reliability best\_effort} или \texttt{--qos-profile sensor\_data} \\
+Предупредување \texttt{DURABILITY} на \texttt{/scan}, \texttt{RELIABILITY} на \texttt{/imu} & Побарана е \texttt{reliable} + \texttt{transient\_local}, а сензорските теми се \texttt{VOLATILE}/\texttt{BEST\_EFFORT} & \texttt{--qos-profile sensor\_data} \\
+\texttt{Unknown topic '/odom'} веднаш по \texttt{ros2 daemon stop} & Daemon-от штотуку е рестартиран и откривањето не завршило & Почекај неколку секунди и повтори \\
+\texttt{podman: command not found} & Командата е извршена во контејнерот & Извршува се на хостот (Fedora) \\
+\bottomrule
+\end{tabular}
+\captionof{table}{Грешки и недоразбирања при поврзувањето}
+\label{tab:greski}
+\end{center}
+
+\newthought{QoS на темите.} На \texttt{/odom} има два издавачи: \texttt{robot\_state} (\texttt{BEST\_EFFORT}, \texttt{VOLATILE}) и \texttt{create3\_repub} (\texttt{RELIABLE}, \texttt{TRANSIENT\_LOCAL}). Контејнерот во почетокот го гледаше само вториот. Сензорските теми (\texttt{/imu}, \texttt{/scan}) се \texttt{VOLATILE}, и за нив одговара \texttt{--qos-profile sensor\_data}. Реалните вредности за секоја тема се проверуваат со \texttt{ros2 topic info <тема> -v}.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{2.6 Моментален статус}{1}
+
+Мрежата и откривањето работат: темите на роботот се гледаат од контејнерот, а обични пораки поминуваат во двете насоки. Податоците од темите на роботот (\texttt{/odom}, \texttt{/battery\_state}) сè уште не пристигнуваат во контејнерот, и причината сè уште не е утврдена. Teleop од контејнерот сè уште не е тестиран, и роботот е на полначот.
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\potglava{2.7 Следни чекори}{1}
+
+\begin{enumerate}
+	\item Во контејнерот, во истата школка, проби со ист QoS како сензорските теми (Команда~\ref{cmd:sensor}).
+	\item Ако не помогне, на контејнерот дај му ја IP адресата на роботот директно, за да не зависи од multicast (Команда~\ref{cmd:peers}). Овој профил го заменува UDP-only профилот од Команда~\ref{cmd:udp}.
+	\item Кога податоците ќе пристигнат, тестирај teleop од контејнерот (Команда~\ref{cmd:ctr-drive}). Прво извади го роботот од докот (точка 1.3) и остави слободен простор околу него.
+\end{enumerate}
+
+\begin{lstlisting}[caption={Тест со QoS за сензорски теми}, label={cmd:sensor}]
+ros2 topic echo /imu --once --qos-profile sensor_data
+ros2 topic echo /scan --once --qos-profile sensor_data
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Fast DDS профил со директна адреса на роботот}, label={cmd:peers}]
+cat > /root/peers.xml <<'EOF'
+<?xml version="1.0" encoding="UTF-8" ?>
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <participant profile_name="peer_participant" is_default_profile="true">
+    <rtps>
+      <builtin>
+        <initialPeersList>
+          <locator>
+            <udpv4>
+              <address>192.168.1.110</address>
+            </udpv4>
+          </locator>
+        </initialPeersList>
+      </builtin>
+    </rtps>
+  </participant>
+</profiles>
+EOF
+export FASTRTPS_DEFAULT_PROFILES_FILE=/root/peers.xml
+ros2 daemon stop
+ros2 topic echo /imu --once --qos-profile sensor_data
+\end{lstlisting}
+
+\begin{lstlisting}[caption={Teleop од контејнерот (преку /cmd\_vel\_unstamped)}, label={cmd:ctr-drive}]
+ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -r cmd_vel:=/cmd_vel_unstamped
+\end{lstlisting}
+
+{\scriptsize Забелешка: на Jazzy \texttt{/cmd\_vel} на TurtleBot 4 очекува \texttt{TwistStamped}, а \texttt{teleop\_twist\_keyboard} објавува обичен \texttt{Twist}, па затоа се користи \texttt{/cmd\_vel\_unstamped}. Ова сè уште не е тестирано.}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\end{document}
