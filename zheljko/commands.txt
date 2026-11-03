@@ -1,0 +1,380 @@
+TURTLEBOT4 (JAZZY) — COMMAND REFERENCE
+======================================
+
+Sections 1-11 only read data. None of them moves the robot or changes its
+configuration.
+Section 12 MOVES THE ROBOT. Use it only when the robot is undocked, has free
+space around it, and nobody else is driving it.
+Sections 14-20 cover the robot's own configuration and admin. Changes there
+affect everyone using the robot, so agree with the class before making one.
+
+These act on the robot. Use them only as described in section 12:
+  ros2 topic pub ...         (e.g. /cmd_vel moves the robot)
+  ros2 action send_goal ...  (e.g. /dock, /undock, /drive_distance)
+  ros2 service call ...      (e.g. /e_stop, /robot_power: these affect everyone)
+  ros2 param set ...         (do not use)
+
+
+1. HOW IT IS CONNECTED
+----------------------
+  your laptop ──classroom Wi-Fi──► TurtleBot4 Raspberry Pi ──cable──► Create 3 base (motors)
+
+  Wi-Fi network     : ASI
+  Robot (Pi)        : 192.168.1.110   (shown on the robot's display too)
+  ROS_DOMAIN_ID     : 0
+  RMW               : rmw_fastrtps_cpp
+
+  You always talk to the robot through the Pi, using the normal topics
+  (/cmd_vel, /odom, /dock, ...). Never use topics under /_do_not_use/.
+  Section 14 explains why it is set up this way.
+
+  Requirements: a Linux laptop with podman, on the ASI Wi-Fi.
+
+
+2. FIRST-TIME SETUP AND ENTERING THE CONTAINER (on your laptop)
+---------------------------------------------------------------
+  # Check that you are on the right Wi-Fi and can reach the robot
+  nmcli -t -f NAME,DEVICE con show --active      # should list ASI
+  ping -c4 192.168.1.110
+
+  # Open a ROS shell. On the first run this builds everything (~1.5 GB download).
+  ./enter.sh          # run it again in every new terminal you want inside
+
+  # Optional
+  ./setup.sh --recreate   # after setup.sh changes; close container shells first
+  ./setup.sh --sim        # also install the Gazebo simulator (large)
+  ./setup.sh --no-build   # use an image loaded from USB instead of downloading (section 19)
+
+  Inside the container, ROS is already sourced and these are set:
+    ROS_DOMAIN_ID=0, RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+  Check with:
+    printenv | grep -E 'ROS|RMW'
+  Your project folder is available inside as /root/ws. Files saved there stay
+  on your laptop.
+
+  Firewall: ROS 2 needs UDP traffic from the robot.
+    Fedora : firewall-cmd --list-all       (ports 1025-65535/udp should be listed)
+    Ubuntu : sudo ufw status               (if active: sudo ufw allow from 192.168.1.0/24)
+
+
+3. IS IT ALIVE? (ROS graph)
+---------------------------
+  ros2 node list                    # expect turtlebot4_node, create3_repub, rplidar_composition, oakd, ...
+  ros2 topic list -t                # all topics with their types
+  ros2 service list
+  ros2 action list                  # /dock, /undock, /drive_distance, ...
+
+  # If results look stale or empty, skip the ROS 2 background daemon:
+  ros2 node list --no-daemon --spin-time 8
+  ros2 daemon stop                  # clears the daemon's cache (on your laptop only, harmless)
+
+  # Details about one node: what it publishes and subscribes to
+  ros2 node info /turtlebot4_node
+  ros2 node info /create3_repub
+
+  # Overall ROS 2 / network health report
+  ros2 doctor --report
+
+
+4. QoS TIP
+----------
+  Create 3 sensor topics are BEST_EFFORT. A default subscriber may receive
+  nothing and warn "offering incompatible QoS". Adding
+      --qos-reliability best_effort
+  to `ros2 topic echo` always works, for both reliable and best-effort publishers.
+
+  `--once` prints a single message and exits. `--field x.y` prints only one field.
+
+
+5. BATTERY & DOCK
+-----------------
+  # Full battery message
+  ros2 topic echo --once --qos-reliability best_effort /battery_state
+
+  # Just the useful fields: percentage is 0.0-1.0
+  # power_supply_status: 1=charging 2=discharging 3=not charging 4=full
+  ros2 topic echo --once --qos-reliability best_effort --field percentage /battery_state
+  ros2 topic echo --once --qos-reliability best_effort --field voltage /battery_state
+  ros2 topic echo --once --qos-reliability best_effort --field power_supply_status /battery_state
+
+  # Is it docked / does it see the dock?
+  ros2 topic echo --once --qos-reliability best_effort /dock_status
+
+
+6. MOTION & ODOMETRY
+--------------------
+  ros2 topic echo --once --qos-reliability best_effort --field twist.twist /odom   # ~0 = standing still
+  ros2 topic echo --once --qos-reliability best_effort --field pose.pose /odom
+  ros2 topic echo --once --qos-reliability best_effort /wheel_status
+  ros2 topic echo --once /joint_states
+
+  # Who is publishing velocity commands? Check that nobody else is driving:
+  ros2 topic info -v /cmd_vel
+  #   Only TwistStamped publishers reach the robot. A teleop_twist_keyboard
+  #   publishing plain Twist on /cmd_vel is ignored (see section 12).
+
+
+7. SENSORS
+----------
+  # Publishing rates (Ctrl+C to stop). Expected values are approximate:
+  ros2 topic hz /odom               # ~20 Hz
+  ros2 topic hz /imu                # ~30-100 Hz (less over Wi-Fi is normal)
+  ros2 topic hz /scan               # ~8 Hz  (RPLIDAR)
+  ros2 topic hz /tf                 # ~10-20 Hz
+  ros2 topic hz /oakd/rgb/preview/image_raw/compressed   # camera; nothing = camera down
+
+  # Bandwidth used by a topic (shows whether heavy data reaches the laptop)
+  ros2 topic bw /scan              # needs ~10-20 s before the first line appears
+
+  # Publisher/subscriber count and QoS for a topic
+  ros2 topic info -v /scan
+
+  # Read one sample
+  ros2 topic echo --once --qos-reliability best_effort --field ranges /scan | head
+  ros2 topic echo --once --qos-reliability best_effort /imu
+  ros2 topic echo --once --qos-reliability best_effort /hazard_detection   # bumps, cliffs, wheel drops
+  ros2 topic echo --once --qos-reliability best_effort /interface_buttons
+  ros2 topic echo --once --qos-reliability best_effort /mouse
+  ros2 topic echo --once /oakd/rgb/preview/camera_info
+
+  # Camera in a web browser (on your laptop, not in the container):
+  #   http://192.168.1.110:8081
+
+
+8. DIAGNOSTICS (the robot's own health report)
+----------------------------------------------
+  # Overall state. level: 0 = OK, 1 = WARN, 2 = ERROR, 3 = STALE
+  ros2 topic echo --once /diagnostics_toplevel_state
+
+  # Full grouped report: Camera, Lidar, Create3, Battery, ...
+  ros2 topic echo --once /diagnostics_agg
+
+  # Only the items that are not OK
+  ros2 topic echo --once /diagnostics_agg | grep -B1 -A2 -E "level: \"\\\\x0[123]\"" | grep -E 'level|name|message'
+
+  # Live raw diagnostics stream
+  ros2 topic echo /diagnostics
+
+
+9. ROBOT INFO
+-------------
+  ros2 topic echo --once /ip                         # Raspberry Pi IP, as the robot reports it
+  ros2 topic echo --once /hmi/display                # what the TB4 screen shows
+  ros2 topic echo --once --field data /robot_description | head -20   # URDF
+  ros2 param list /turtlebot4_node
+  ros2 param get /turtlebot4_node model              # standard / lite
+  ros2 param dump /turtlebot4_node                   # all parameters (prints only; changes nothing)
+  ros2 interface show irobot_create_msgs/msg/DockStatus   # what a message type contains
+
+
+10. GUI TOOLS (windows open on your laptop screen)
+--------------------------------------------------
+  ros2 launch turtlebot4_viz view_robot.launch.py    # RViz: robot model, lidar, TF
+  rqt_graph                                          # which nodes talk over which topics
+  rqt_robot_monitor                                  # diagnostics as a tree, colour-coded
+  rqt_image_view                                     # camera (pick .../compressed for Wi-Fi)
+  ros2 run rqt_tf_tree rqt_tf_tree                   # TF frame tree
+  rqt                                                # all rqt plugins (Plugins menu)
+  #   If no window appears: exit, run ./enter.sh again, and try once more.
+
+
+11. QUICK HEALTH CHECK (copy-paste inside the container)
+--------------------------------------------------------
+  E="--no-daemon --spin-time 5"; B="--qos-reliability best_effort"
+  echo "nodes: $(ros2 node list $E | wc -l)"
+  timeout 15 ros2 topic echo $E $B --once --field percentage /battery_state
+  timeout 15 ros2 topic echo $E --once /ip
+  timeout 15 ros2 topic echo $E --once --field level /diagnostics_toplevel_state
+  for t in /odom /scan; do echo "$t:"; timeout 10 ros2 topic hz $t | grep -m1 average; done
+
+
+12. MOVING THE ROBOT  (!! NOT read-only: these commands move it !!)
+------------------------------------------------------------------
+  Before you start:
+    - Check that it is undocked: /dock_status -> is_docked: false
+    - Check that the space around it is free.
+    - Only one person drives at a time. Check with: ros2 topic info -v /cmd_vel
+    - Ctrl+C stops any command below. Publishing stops, and the robot stops within a moment.
+
+  # Undock / dock
+  ros2 action send_goal /undock irobot_create_msgs/action/Undock "{}"
+  ros2 action send_goal /dock   irobot_create_msgs/action/Dock   "{}"
+
+  # Exact distance / angle (recommended: the base measures and stops by itself)
+  ros2 action send_goal /drive_distance irobot_create_msgs/action/DriveDistance \
+      "{distance: 0.2, max_translation_speed: 0.1}" --feedback          # 20 cm forward; negative = backward
+  ros2 action send_goal /rotate_angle irobot_create_msgs/action/RotateAngle \
+      "{angle: 1.57, max_rotation_speed: 0.5}" --feedback              # 90 deg left (radians); negative = right
+  #   Speed limit: about 0.306 m/s. Expected result: "Goal finished with status: SUCCEEDED".
+  #   If it hangs after "Sending goal:", press Ctrl+C and send it again.
+  #   To give up automatically, put `timeout 60` in front of the command.
+
+  # Velocity on /cmd_vel. It MUST be TwistStamped (plain Twist goes to /cmd_vel_unstamped).
+  # The base stops if commands stop arriving, so publish continuously (-r 20).
+  # distance = speed x time: 0.1 m/s x 2 s (40 msgs at 20 Hz) = about 20 cm (not exact)
+  ros2 topic pub -r 20 -t 40 /cmd_vel geometry_msgs/msg/TwistStamped "{twist: {linear: {x: 0.1}}}"
+  ros2 topic pub -r 20 -t 40 /cmd_vel geometry_msgs/msg/TwistStamped "{twist: {angular: {z: 0.5}}}"   # turn left
+  ros2 topic pub --once      /cmd_vel geometry_msgs/msg/TwistStamped "{}"                             # stop
+
+  # Same thing with plain Twist
+  ros2 topic pub -r 20 -t 40 /cmd_vel_unstamped geometry_msgs/msg/Twist "{linear: {x: 0.1}}"
+
+  # Keyboard teleop: it must publish stamped messages, or the robot ignores it.
+  # Close it when you are done, so it does not block others.
+  ros2 run teleop_twist_keyboard teleop_twist_keyboard --ros-args -p stamped:=true
+  #   (alternative: --ros-args -r cmd_vel:=cmd_vel_unstamped)
+
+  # Measure how far it really went: compare before/after
+  ros2 topic echo --once --qos-reliability best_effort --field pose.pose.position /odom
+
+
+13. TROUBLESHOOTING
+-------------------
+  No nodes visible:
+    - laptop on a different Wi-Fi?          -> section 2 (nmcli, ping)
+    - firewall blocking UDP?                -> section 2 (Firewall)
+    - wrong domain / RMW?                   -> printenv | grep -E 'ROS|RMW'  (want 0 / rmw_fastrtps_cpp)
+    - container not using host network?     -> podman inspect turtlebox --format '{{.HostConfig.NetworkMode}}'  (want: host)
+    - a VPN (Tailscale, WireGuard, ...) can confuse discovery; try with it turned off.
+  "Could not determine the type for the passed topic" or stale/empty lists:
+    - the ROS 2 daemon cache is stale -> ros2 daemon stop, or add --no-daemon --spin-time 5
+  Topics are listed but echo shows nothing:
+    - add --qos-reliability best_effort      (section 4)
+    - "message type is invalid"              -> ./setup.sh --recreate
+  Keyboard teleop does nothing:
+    - it publishes plain Twist; start it with -p stamped:=true (section 12)
+  Nothing moves although commands are accepted:
+    - is it docked? check /dock_status; undock first
+    - hazard active (bump, cliff, wheel drop)? check /hazard_detection
+    - someone else driving? ros2 topic info -v /cmd_vel
+  Nodes visible but /odom, /battery_state, /dock_status are empty:
+    - the Create 3 is still booting (a few minutes after the chime); wait
+    - the Pi lost the base               -> section 17: ping 192.168.186.2, restart turtlebot4
+  Goals hang after "Sending goal:" every time:
+    - create3_repub is stuck             -> section 17: sudo systemctl restart turtlebot4
+  Goals end "ABORTED" with an all-zero pose, or movement works only sometimes:
+    - ros2 action info /drive_distance shows 2 servers, or motion_control is visible
+      -> the Create 3 namespace is wrong or it rejoined Wi-Fi: sections 15 and 16
+  Camera topics empty, /rosout shows X_LINK_DEVICE_ALREADY_IN_USE:
+    - another process holds the OAK-D    -> section 17: restart turtlebot4
+
+
+14. ROBOT LAYOUT IN DETAIL (recommended TB4 Jazzy setup, configured on 2026-11-03)
+-----------------------------------------------------------------------------------
+  laptops ──ASI Wi-Fi──► Raspberry Pi ──USB-C──► Create 3 base (motors)
+                         (create3_repub relays everything)
+
+  TB4 Raspberry Pi  : 192.168.1.110 on ASI (DHCP, may change)
+                      usb0 = 192.168.186.3 (link to the Create 3)
+  Create 3 base     : OFF Wi-Fi, 192.168.186.2 on the USB link only
+                      web UI: http://192.168.1.110:8080  (forwarded by the Pi)
+                      firmware I.0.0.FastDDS, namespace /_do_not_use
+  ROS_DOMAIN_ID     : 0
+  RMW               : rmw_fastrtps_cpp
+  Discovery         : simple multicast (discovery server OFF)
+
+  Why /_do_not_use: the TB4 Jazzy bringup hardcodes create3_ns = '_do_not_use'
+  for create3_republisher. If the Create 3 uses another namespace (e.g. empty),
+  each action gets two servers and goals randomly hang or end ABORTED with an
+  all-zero pose. Velocity commands also go nowhere.
+  Why off Wi-Fi: the TB4 networking guide says that with simple discovery,
+  the Create 3 should be left offline. Otherwise every laptop does DDS
+  discovery with the Create 3 itself, and it drops out under load.
+
+  Sources:
+    https://turtlebot.github.io/turtlebot4-user-manual/setup/networking.html
+    https://github.com/turtlebot/turtlebot4_robot/blob/jazzy/turtlebot4_bringup/launch/robot.launch.py
+
+
+15. VERIFY THE ROBOT CONFIGURATION (read-only)
+----------------------------------------------
+  # On the laptop (not in the container):
+  ping -c4 192.168.1.110
+  curl -s http://192.168.1.110:8080/home | grep -o 'robot-info[^>]*'
+  curl -s http://192.168.1.110:8080/ros-config | grep -oE 'id="ros_(domain_id|namespace)"[^>]*|selected>[a-z_]*'
+  #   expect: namespace value="/_do_not_use", domain 0, rmw_fastrtps_cpp
+
+  # The Create 3 must NOT be on Wi-Fi: after a subnet ping, no 50:14:79:... MAC
+  for i in $(seq 2 254); do ping -c1 -W1 192.168.1.$i >/dev/null & done; wait
+  ip neigh | grep -i '50:14:79' || echo "OK: Create 3 not on Wi-Fi"
+  #   (d8:3a:dd:... = Raspberry Pi, 50:14:79:... = iRobot Create 3)
+
+  # Inside the container (./enter.sh):
+  ros2 action info /drive_distance               # exactly 1 server: /create3_repub
+  ros2 node list | grep -E 'motion_control|_internal' || echo "OK: Create 3 hidden"
+
+
+16. CONFIGURING THE CREATE 3 (after a factory reset, a firmware update, or a new robot)
+---------------------------------------------------------------------------------------
+  Changes here affect everyone. Use http://192.168.1.110:8080, NOT the
+  Create 3's own Wi-Fi IP. The page has to keep working after the base leaves Wi-Fi.
+
+  0. On the Pi, check the USB link first:  ping 192.168.186.2   (must answer)
+  1. Application -> Configuration:
+       ROS 2 Domain ID 0, Namespace /_do_not_use, RMW rmw_fastrtps_cpp,
+       discovery server unchecked -> green "Save"
+  2. Application -> Restart application. Refresh the page and check that the namespace was kept.
+  3. Beta Features -> Forget Wi-Fi Network (confirm)
+  4. Application -> Reboot robot. Wait for the chime and a few more minutes.
+  5. Verify with section 15. /battery_state and /odom data can take a few
+     minutes to appear after the chime.
+
+  Undo: clear the namespace and save/restart. To put the base back on Wi-Fi,
+  use the "Connect" page.
+
+
+17. ON THE RASPBERRY PI (SSH)
+-----------------------------
+  ssh ubuntu@192.168.1.110
+  systemctl status turtlebot4        # TB4 bringup service
+  journalctl -u turtlebot4 -n 50     # recent logs
+  sudo systemctl restart turtlebot4  # fixes a stuck create3_repub (goals hang) or the camera
+  ip -br addr                        # wlan0 = Wi-Fi, usb0 = 192.168.186.3
+  ping -c3 192.168.186.2             # the Create 3 over USB
+  # The turtlebot4-setup tool changes Pi configuration. Use it deliberately.
+
+  Harmless messages when running ros2 on the Pi:
+    [RTPS_TRANSPORT_SHM Error] Failed init_port fastrtps_port70xx: open_and_lock_file failed
+  This is Fast DDS shared memory falling back to UDP. Inspect/clean with:
+    ls -l /dev/shm | grep fastrtps
+    fastdds shm clean                # only removes files no process is using
+
+  Camera error "X_LINK_DEVICE_ALREADY_IN_USE" in /rosout: another process holds
+  the OAK-D. Restart the turtlebot4 service.
+
+
+18. ACCESS NOTES
+----------------
+  - The Create 3 web UI (port 8080 on the Pi) has no password. Anyone on ASI
+    can change the namespace, forget Wi-Fi, reboot the base or flash firmware,
+    and that affects the whole class. Only change things there on purpose.
+  - SSH to the Pi uses user "ubuntu". The TB4 default password is public, so
+    the robot owner may want to change it (`passwd` on the Pi).
+  - The camera stream (port 8081) is read-only.
+
+
+19. SHARING THE CONTAINER IMAGE BY USB (saves Wi-Fi in class)
+-------------------------------------------------------------
+  The image is ~4 GB (about 1.5 GB to download). A whole class downloading it
+  over the robot's Wi-Fi slows everything down. Run ./enter.sh at home before
+  class, or copy the image from someone who already has it:
+
+  # On a laptop that already has it:
+  podman save localhost/turtlebox:jazzy -o turtlebox.tar
+
+  # On your laptop:
+  podman load -i turtlebox.tar
+  ./enter.sh                         # creates the container without rebuilding
+
+  After changing setup.sh: rebuild (./setup.sh), then save and share the image again.
+
+
+20. KNOWN ISSUES SEEN SO FAR
+----------------------------
+  - teleop_twist_keyboard publishes plain Twist on /cmd_vel by default, which
+    the robot ignores. Use `-p stamped:=true` (section 12).
+  - Several people driving at once fight over /cmd_vel. Agree on one driver.
+  - The battery drains noticeably during a session. Dock between exercises.
+  - With more robots: give each robot and the people using it their own
+    ROS_DOMAIN_ID. Set it on the Pi and the Create 3, and on each laptop run
+    ROS_DOMAIN_ID=<n> ./setup.sh --recreate
