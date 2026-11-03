@@ -1,7 +1,7 @@
 %%% Laboratory	 Notes
 %%% Template by Mikhail Klassen, April 2013
 %%% Contributions from Sarah Mount, May 2014
-\documentclass[a4paper]{tufte-handout}
+\documentclass[a4paper,nols]{tufte-handout}
 
 % Поддршка за кирилица (pdflatex)
 \usepackage[utf8]{inputenc}
@@ -110,7 +110,7 @@
 % Легенда на авторите
 \begin{center}\small
 \textsuperscript{1}~Теодор Тодоровски \\
-Бројот зад насловот на секоја глава го означува нејзиниот автор.
+Бројот зад насловот на секоја глава го означува нејзиниот автор тест.
 \end{center}
 
 \mojasodrzina
@@ -166,8 +166,8 @@ ping 192.168.1.110
 
 \begin{lstlisting}[caption={Поврзување со Жејко преку SSH}, label={cmd:ssh}]
 ssh ubuntu@192.168.1.110
-# Лозинка: turtlebot4
 \end{lstlisting}
+Лозинка: \texttt{turtlebot4} (ако не е менувана).
 
 За различните сервиси (лидар, движење, камера \ldots) потребно е истовремено да бидат отворени повеќе терминали на компјутерот. Во секој нов терминал се извршува наредбата за SSH од Команда~\ref{cmd:ssh}, а потоа во ROS се стартува соодветниот сервис.
 
@@ -179,7 +179,7 @@ ssh ubuntu@192.168.1.110
 \begin{lstlisting}[caption={Вадење на роботот од докот (undock)}, label={cmd:undock}]
 ros2 action send_goal /undock irobot_create_msgs/action/Undock "{}"
 \end{lstlisting}
-{\scriptsize Забелешка: во теорија ова е доволно, но во пракса понекогаш нема реакција на оваа наредба. Тогаш роботот се вади од докот рачно, преку опцијата „undock“ на самиот робот.}
+Забелешка: во теорија ова е доволно, но во пракса понекогаш нема реакција на оваа наредба. Тогаш роботот се вади од докот рачно, преку опцијата \texttt{undock} на самиот робот.
 
 \begin{lstlisting}[caption={Движење со тастатура}, label={cmd:drive}]
 ros2 run teleop_twist_keyboard teleop_twist_keyboard
@@ -387,11 +387,11 @@ apt install -y ros-jazzy-teleop-twist-keyboard
 \end{itemize}
 
 \begin{lstlisting}[caption={Тест на комуникацијата во двете насоки}, label={cmd:hitest}]
-# контејнер:
+# container:
 ros2 topic pub /test std_msgs/msg/String "{data: hi}"
-# робот (SSH):
+# robot (SSH):
 ros2 topic echo /test
-# и обратно: pub на роботот, echo во контејнерот
+# reverse: publish on robot, echo in container
 \end{lstlisting}
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

@@ -15,6 +15,22 @@
 - Не додавај `.pdf` и помошни фајлови во репото (`.gitignore` ги игнорира).
 
 ## Компајлирање
-- **VS Code:** инсталирај TeX Live и ексензијата *LaTeX Workshop* (препорачана), па Ctrl+S (автоматски build).
-- **Терминал:** `pdflatex main.tex` (двапати, за да се изгради содржината).
-- **Fedora:** `sudo dnf install texlive-scheme-full`
+- **Fedora, прво поставување:** инсталирај ги потребните LaTeX пакети (не целиот TeX Live):
+  ```bash
+  sudo dnf install \
+    texlive-scheme-basic \
+    texlive-tufte-latex \
+    texlive-collection-latexrecommended \
+    texlive-collection-langcyrillic \
+    texlive-collection-fontsrecommended \
+    texlive-extract \
+    texlive-multibib \
+    texlive-pstricks \
+    texlive-sauerj \
+    texlive-hardwrap \
+    texlive-xifthen
+  ```
+- **Градење на PDF:** од папката на репото изврши `bash build.sh`. Скриптата го компајлира документот двапати и го зачувува во `build/main.pdf`.
+- **VS Code:** инсталирај ја ексензијата *LaTeX Workshop* (препорачана); по инсталирањето на пакетите погоре може да градиш од VS Code.
+
+Ако градењето запре со `File 'име.sty' not found`, недостасува LaTeX пакет. На Fedora најди кој пакет ја содржи датотеката со `dnf provides '*/име.sty'`, инсталирај го со `sudo dnf install име-на-пакет`, па повторно изврши `bash build.sh`.
