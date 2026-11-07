@@ -20,6 +20,7 @@ BASE=docker.io/library/ros:jazzy-ros-base
 DOMAIN_ID=${ROS_DOMAIN_ID:-0}
 RMW=rmw_fastrtps_cpp
 HERE=$(cd "$(dirname "$0")" && pwd)
+PROJECT_ROOT=$(dirname "$HERE")
 
 recreate=0; rename_old=0; sim=0; build=1
 for arg in "$@"; do
@@ -38,6 +39,7 @@ PACKAGES=(
     ros-jazzy-turtlebot4-msgs
     ros-jazzy-irobot-create-msgs
     ros-jazzy-rmw-fastrtps-cpp
+    python3-yaml
     # TurtleBot4 PC software: RViz2 + robot model + view launchers (turtlebot4_viz)
     ros-jazzy-turtlebot4-desktop
     # SLAM, localization and Nav2 launchers for TB4 (slam_toolbox, nav2)
@@ -110,7 +112,7 @@ echo ">> Creating container $NAME"
 # DISPLAY + X11 socket  : GUI apps (rviz2, rqt) open on the laptop screen via Xwayland
 # --device /dev/dri     : GPU acceleration for rviz2 / Gazebo
 # label=disable         : lets SELinux allow access to the X11 socket and the project folder
-# project folder        : mounted at /root/ws, so files you save there stay on your laptop
+# project root          : mounted at /root/ws, so NAVI_TEST and maps are available
 podman create \
     --name "$NAME" \
     --hostname "$NAME" \
@@ -122,7 +124,7 @@ podman create \
     -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
     -e ROS_DOMAIN_ID="$DOMAIN_ID" \
     -e RMW_IMPLEMENTATION="$RMW" \
-    -v "$HERE":/root/ws \
+    -v "$PROJECT_ROOT":/root/ws \
     -w /root/ws \
     "$IMAGE" sleep infinity
 

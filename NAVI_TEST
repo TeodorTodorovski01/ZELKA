@@ -1,0 +1,552 @@
+#!/usr/bin/env python3
+"""Supervised frontier exploration and map saving for the TurtleBot 4 Jazzy kit."""
+
+import csv
+import math
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+
+MAP_ROOT = Path(__file__).resolve().parent / "maps"
+MAX_LINEAR_SPEED = 0.10
+MAX_ANGULAR_SPEED = 0.35
+SENSOR_TIMEOUT = 2.0
+TRAIL_INTERVAL = 1.0
+MIN_FRONTIER_CELLS = 4
+BLACKLIST_DISTANCE = 0.50
+GOAL_TIMEOUT = 180.0
+
+
+def next_map_directory():
+    MAP_ROOT.mkdir(parents=True, exist_ok=True)
+    number = 1
+    while True:
+        candidate = MAP_ROOT / f"AutoMap_{number}"
+        try:
+            candidate.mkdir()
+            return candidate
+        except FileExistsError:
+            number += 1
+
+
+def create_nav2_params():
+    import yaml
+
+    result = subprocess.run(
+        ["ros2", "pkg", "prefix", "--share", "turtlebot4_navigation"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    source = Path(result.stdout.strip()) / "config" / "nav2.yaml"
+    with source.open(encoding="utf-8") as stream:
+        params = yaml.safe_load(stream)
+
+    controller = params["controller_server"]["ros__parameters"]
+    follow_path = controller["FollowPath"]
+    follow_path["vx_max"] = MAX_LINEAR_SPEED
+    follow_path["vx_min"] = 0.0
+    follow_path["wz_max"] = MAX_ANGULAR_SPEED
+    follow_path["ax_max"] = 0.2
+    follow_path["ax_min"] = -0.3
+    follow_path["az_max"] = 0.5
+    controller["progress_checker"]["required_movement_radius"] = 0.15
+    controller["progress_checker"]["movement_time_allowance"] = 20.0
+
+    handle, filename = tempfile.mkstemp(prefix="navi_test_nav2_", suffix=".yaml")
+    with os.fdopen(handle, "w", encoding="utf-8") as stream:
+        yaml.safe_dump(params, stream, sort_keys=False)
+    return Path(filename)
+
+
+def stop_process(process):
+    if process is None or process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGINT)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+
+
+def nearest_frontier(message, robot_position, blacklisted):
+    info = message.info
+    width, height = info.width, info.height
+    data = message.data
+    frontiers = set()
+
+    for y in range(1, height - 1):
+        row = y * width
+        for x in range(1, width - 1):
+            index = row + x
+            if not 0 <= data[index] < 50:
+                continue
+            if any(
+                data[(y + dy) * width + x + dx] == -1
+                for dy in (-1, 0, 1)
+                for dx in (-1, 0, 1)
+                if dx or dy
+            ):
+                frontiers.add(index)
+
+    if not frontiers:
+        return None
+
+    origin = info.origin
+    q = origin.orientation
+    yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+    cosine, sine = math.cos(yaw), math.sin(yaw)
+
+    def world_position(cell_x, cell_y):
+        local_x = (cell_x + 0.5) * info.resolution
+        local_y = (cell_y + 0.5) * info.resolution
+        return (
+            origin.position.x + cosine * local_x - sine * local_y,
+            origin.position.y + sine * local_x + cosine * local_y,
+        )
+
+    robot_x, robot_y = robot_position
+    candidates = []
+    while frontiers:
+        seed = frontiers.pop()
+        cluster = [seed]
+        queue = [seed]
+        while queue:
+            index = queue.pop()
+            x, y = index % width, index // width
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    if not (dx or dy):
+                        continue
+                    neighbor = (y + dy) * width + x + dx
+                    if neighbor in frontiers:
+                        frontiers.remove(neighbor)
+                        cluster.append(neighbor)
+                        queue.append(neighbor)
+        if len(cluster) < MIN_FRONTIER_CELLS:
+            continue
+
+        mean_x = sum(index % width for index in cluster) / len(cluster)
+        mean_y = sum(index // width for index in cluster) / len(cluster)
+        target = min(
+            cluster,
+            key=lambda index: (index % width - mean_x) ** 2 + (index // width - mean_y) ** 2,
+        )
+        map_x, map_y = world_position(target % width, target // width)
+        if any(
+            math.hypot(map_x - blocked_x, map_y - blocked_y) < BLACKLIST_DISTANCE
+            for blocked_x, blocked_y in blacklisted
+        ):
+            continue
+        candidates.append((math.hypot(map_x - robot_x, map_y - robot_y), map_x, map_y))
+
+    if not candidates:
+        return None
+    _, x, y = min(candidates)
+    return x, y
+
+
+def run():
+    if not os.isatty(sys.stdin.fileno()):
+        raise RuntimeError("Run from an interactive terminal so the safety prompt can be confirmed.")
+
+    from action_msgs.msg import GoalStatus
+    from geometry_msgs.msg import PoseStamped
+    from irobot_create_msgs.action import Dock
+    from nav2_msgs.action import NavigateToPose
+    from nav_msgs.msg import OccupancyGrid, Odometry
+    import rclpy
+    from rclpy.action import ActionClient
+    from rclpy.node import Node
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+    from rclpy.time import Time
+    from sensor_msgs.msg import BatteryState, LaserScan
+    from tf2_ros import Buffer, TransformException, TransformListener
+    from irobot_create_msgs.msg import HazardDetectionVector
+
+    class Explorer(Node):
+        def __init__(self):
+            super().__init__("navi_test_explorer")
+            self.scan_time = None
+            self.odom_time = None
+            self.hazard_time = None
+            self.map_message = None
+            self.stop_reason = None
+            self.goal_handle = None
+            self.blacklisted = []
+            self.monitor_inputs = False
+            self.start_pose = None
+            self.trail_last_time = 0.0
+            self.trail_file = None
+            self.trail_writer = None
+            self.dock_goal_handle = None
+
+            map_qos = QoSProfile(
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            self.create_subscription(LaserScan, "/scan", self.on_scan, qos_profile_sensor_data)
+            self.create_subscription(Odometry, "/odom", self.on_odom, qos_profile_sensor_data)
+            self.create_subscription(
+                HazardDetectionVector, "/hazard_detection", self.on_hazard, qos_profile_sensor_data
+            )
+            self.create_subscription(BatteryState, "/battery_state", self.on_battery, qos_profile_sensor_data)
+            self.create_subscription(OccupancyGrid, "/map", self.on_map, map_qos)
+            self.tf_buffer = Buffer()
+            self.tf_listener = TransformListener(self.tf_buffer, self)
+            self.action_client = ActionClient(self, NavigateToPose, "/navigate_to_pose")
+            self.dock_client = ActionClient(self, Dock, "/dock")
+            self.create_timer(0.25, self.check_sensors)
+
+        def on_scan(self, _message):
+            self.scan_time = time.monotonic()
+
+        def on_odom(self, message):
+            self.odom_time = time.monotonic()
+            if self.trail_writer is None or self.odom_time - self.trail_last_time < TRAIL_INTERVAL:
+                return
+            stamp = message.header.stamp
+            pose = message.pose.pose
+            self.trail_writer.writerow(
+                [
+                    f"{stamp.sec}.{stamp.nanosec:09d}",
+                    message.header.frame_id,
+                    pose.position.x,
+                    pose.position.y,
+                    pose.position.z,
+                    pose.orientation.x,
+                    pose.orientation.y,
+                    pose.orientation.z,
+                    pose.orientation.w,
+                ]
+            )
+            self.trail_file.flush()
+            self.trail_last_time = self.odom_time
+
+        def open_trail(self, path):
+            self.trail_file = path.open("w", newline="", encoding="utf-8")
+            self.trail_writer = csv.writer(self.trail_file)
+            self.trail_writer.writerow(
+                [
+                    "ros_time_seconds",
+                    "frame_id",
+                    "x",
+                    "y",
+                    "z",
+                    "orientation_x",
+                    "orientation_y",
+                    "orientation_z",
+                    "orientation_w",
+                ]
+            )
+
+        def close_trail(self):
+            if self.trail_file is not None:
+                self.trail_file.close()
+                self.trail_file = None
+                self.trail_writer = None
+
+        def on_hazard(self, message):
+            self.hazard_time = time.monotonic()
+            if message.detections:
+                self.stop_reason = "the robot reported a bump, cliff, or other hazard"
+                if self.goal_handle is not None:
+                    self.goal_handle.cancel_goal_async()
+                if self.dock_goal_handle is not None:
+                    self.dock_goal_handle.cancel_goal_async()
+
+        def on_battery(self, message):
+            if math.isfinite(message.percentage) and 0.0 <= message.percentage < 0.20:
+                self.stop_reason = f"battery is low ({message.percentage:.0%})"
+                if self.goal_handle is not None:
+                    self.goal_handle.cancel_goal_async()
+                if self.dock_goal_handle is not None:
+                    self.dock_goal_handle.cancel_goal_async()
+
+        def on_map(self, message):
+            if message.info.width and message.info.height:
+                self.map_message = message
+
+        def check_sensors(self):
+            if not self.monitor_inputs or self.stop_reason is not None:
+                return
+            now = time.monotonic()
+            if self.scan_time is None or now - self.scan_time > SENSOR_TIMEOUT:
+                self.stop_reason = "LiDAR scan data stopped"
+            elif self.odom_time is None or now - self.odom_time > SENSOR_TIMEOUT:
+                self.stop_reason = "odometry data stopped"
+            elif self.hazard_time is None or now - self.hazard_time > SENSOR_TIMEOUT:
+                self.stop_reason = "hazard detection data stopped"
+            if self.stop_reason is not None and self.goal_handle is not None:
+                self.goal_handle.cancel_goal_async()
+
+        def spin_until(self, future, timeout):
+            deadline = time.monotonic() + timeout
+            while rclpy.ok() and not future.done() and time.monotonic() < deadline:
+                rclpy.spin_once(self, timeout_sec=0.1)
+            return future.done()
+
+        def wait_for_inputs(self, timeout=30.0):
+            deadline = time.monotonic() + timeout
+            while rclpy.ok() and time.monotonic() < deadline:
+                rclpy.spin_once(self, timeout_sec=0.1)
+                if self.scan_time and self.odom_time and self.hazard_time:
+                    return
+            raise RuntimeError(
+                "Timed out waiting for /scan, /odom, and /hazard_detection. "
+                "Check the robot connection and ROS topics before retrying."
+            )
+
+        def wait_for_map(self, timeout=60.0):
+            deadline = time.monotonic() + timeout
+            while rclpy.ok() and time.monotonic() < deadline:
+                rclpy.spin_once(self, timeout_sec=0.1)
+                if self.map_message is not None:
+                    return
+            raise RuntimeError("Timed out waiting for a non-empty SLAM map.")
+
+        def wait_for_nav2(self, timeout=90.0):
+            deadline = time.monotonic() + timeout
+            while rclpy.ok() and time.monotonic() < deadline:
+                if self.action_client.wait_for_server(timeout_sec=0.1):
+                    return
+                rclpy.spin_once(self, timeout_sec=0.1)
+            raise RuntimeError("Nav2 did not provide the /navigate_to_pose action.")
+
+        def current_map_pose(self):
+            transform = self.tf_buffer.lookup_transform("map", "base_link", Time())
+            translation = transform.transform.translation
+            rotation = transform.transform.rotation
+            yaw = math.atan2(
+                2.0 * (rotation.w * rotation.z + rotation.x * rotation.y),
+                1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z),
+            )
+            return translation.x, translation.y, yaw
+
+        def wait_for_map_pose(self, timeout=30.0):
+            deadline = time.monotonic() + timeout
+            while rclpy.ok() and time.monotonic() < deadline:
+                try:
+                    self.start_pose = self.current_map_pose()
+                    return
+                except TransformException:
+                    rclpy.spin_once(self, timeout_sec=0.1)
+            raise RuntimeError("Timed out waiting for the robot's pose in the SLAM map.")
+
+        def next_frontier(self):
+            if self.map_message is None:
+                return None
+            robot_x, robot_y, _ = self.current_map_pose()
+            return nearest_frontier(self.map_message, (robot_x, robot_y), self.blacklisted)
+
+        def navigate(self, x, y, yaw, timeout):
+            pose = PoseStamped()
+            pose.header.frame_id = "map"
+            pose.header.stamp = self.get_clock().now().to_msg()
+            pose.pose.position.x = x
+            pose.pose.position.y = y
+            pose.pose.orientation.z = math.sin(yaw / 2.0)
+            pose.pose.orientation.w = math.cos(yaw / 2.0)
+            goal = NavigateToPose.Goal()
+            goal.pose = pose
+
+            future = self.action_client.send_goal_async(goal)
+            if not self.spin_until(future, 10.0):
+                return False
+            self.goal_handle = future.result()
+            if not self.goal_handle.accepted:
+                self.goal_handle = None
+                return False
+
+            result_future = self.goal_handle.get_result_async()
+            deadline = time.monotonic() + timeout
+            while (
+                rclpy.ok()
+                and not result_future.done()
+                and self.stop_reason is None
+                and time.monotonic() < deadline
+            ):
+                rclpy.spin_once(self, timeout_sec=0.1)
+            if not result_future.done():
+                self.goal_handle.cancel_goal_async()
+                self.spin_until(result_future, 5.0)
+                self.goal_handle = None
+                return False
+            result = result_future.result()
+            self.goal_handle = None
+            return result.status == GoalStatus.STATUS_SUCCEEDED
+
+        def return_to_start_and_dock(self):
+            if self.stop_reason or self.start_pose is None:
+                print("Skipping return and docking because exploration did not finish normally.")
+                return
+            x, y, yaw = self.start_pose
+            print("Exploration is complete; returning to the recorded start pose.")
+            if not self.navigate(x, y, yaw, GOAL_TIMEOUT):
+                print("Could not reach the start pose; not attempting to dock.")
+                return
+            if not self.dock_client.wait_for_server(timeout_sec=5.0):
+                print("The /dock action is unavailable; robot returned to its start pose but did not dock.")
+                return
+            print("At the start pose; requesting the Create 3 docking action.")
+            future = self.dock_client.send_goal_async(Dock.Goal())
+            if not self.spin_until(future, 10.0):
+                print("Dock action did not respond; robot may remain at the start pose.")
+                return
+            goal_handle = future.result()
+            if not goal_handle.accepted:
+                print("Dock action was rejected; robot remains at its start pose.")
+                return
+            self.dock_goal_handle = goal_handle
+            result_future = goal_handle.get_result_async()
+            if not self.spin_until(result_future, 120.0):
+                goal_handle.cancel_goal_async()
+                self.spin_until(result_future, 5.0)
+                self.dock_goal_handle = None
+                print("Dock action timed out; inspect the robot and dock.")
+                return
+            result = result_future.result()
+            self.dock_goal_handle = None
+            if result.status == GoalStatus.STATUS_SUCCEEDED and result.result.is_docked:
+                print("Robot docked successfully.")
+            else:
+                print(f"Dock action ended with status {result.status}; verify dock status manually.")
+
+        def explore_frontiers(self):
+            self.monitor_inputs = True
+            while rclpy.ok() and self.stop_reason is None:
+                rclpy.spin_once(self, timeout_sec=0.1)
+                if self.stop_reason:
+                    break
+                try:
+                    target = self.next_frontier()
+                except TransformException:
+                    continue
+                if target is None:
+                    print("No reachable unvisited frontiers remain; exploration is complete.")
+                    return
+
+                x, y = target
+                print(f"Exploring frontier at ({x:.2f}, {y:.2f}) m; press Ctrl+C to stop.")
+                if self.navigate(x, y, 0.0, GOAL_TIMEOUT):
+                    print("Frontier reached.")
+                else:
+                    self.blacklisted.append(target)
+                    if self.stop_reason is None:
+                        print("Frontier goal failed or timed out; skipping it.")
+
+            if self.stop_reason:
+                print(f"Stopping exploration: {self.stop_reason}.")
+
+    if not shutil_which_ros2():
+        raise RuntimeError("ROS 2 `ros2` was not found. Run this script inside the Jazzy container.")
+
+    print("NAVI_TEST will map reachable frontiers, save a route trail, then return and attempt to dock.")
+    print("Only continue in a clear, isolated area. Stay beside the robot with access to its stop control.")
+    print("Undock manually first and start near the dock so it can be approached from the start pose.")
+    print("Do not use near stairs, people, or unprotected edges.")
+    if input('Type "START" to launch mapping and autonomous exploration: ').strip() != "START":
+        print("Cancelled; the robot was not started.")
+        return
+
+    run_directory = next_map_directory()
+    map_base = run_directory / run_directory.name
+    trail_path = run_directory / "route.csv"
+    nav2_params = None
+    slam_process = None
+    nav2_process = None
+    node = None
+    rclpy.init()
+    try:
+        node = Explorer()
+        node.open_trail(trail_path)
+        node.wait_for_inputs()
+        if node.stop_reason:
+            raise RuntimeError(node.stop_reason)
+
+        slam_process = subprocess.Popen(
+            ["ros2", "launch", "turtlebot4_navigation", "slam.launch.py", "sync:=false"],
+            start_new_session=True,
+        )
+        node.wait_for_map()
+        nav2_params = create_nav2_params()
+        nav2_process = subprocess.Popen(
+            [
+                "ros2",
+                "launch",
+                "turtlebot4_navigation",
+                "nav2.launch.py",
+                f"params_file:={nav2_params}",
+            ],
+            start_new_session=True,
+        )
+        node.wait_for_nav2()
+        node.wait_for_map_pose()
+        node.explore_frontiers()
+        node.return_to_start_and_dock()
+    finally:
+        if node is not None:
+            if node.goal_handle is not None:
+                node.goal_handle.cancel_goal_async()
+                deadline = time.monotonic() + 5.0
+                while rclpy.ok() and time.monotonic() < deadline:
+                    rclpy.spin_once(node, timeout_sec=0.1)
+            if node.dock_goal_handle is not None:
+                node.dock_goal_handle.cancel_goal_async()
+                deadline = time.monotonic() + 5.0
+                while rclpy.ok() and time.monotonic() < deadline:
+                    rclpy.spin_once(node, timeout_sec=0.1)
+            stop_process(nav2_process)
+            nav2_process = None
+            if node.map_message is not None and slam_process is not None:
+                print(f"Saving map to {map_base}.yaml ...")
+                try:
+                    saved = subprocess.run(
+                        ["ros2", "run", "nav2_map_server", "map_saver_cli", "-f", str(map_base)],
+                        timeout=45,
+                        check=False,
+                    )
+                    if saved.returncode == 0:
+                        print(f"Map saved in {run_directory}.")
+                    else:
+                        print(f"Map saver exited with status {saved.returncode}.")
+                except subprocess.TimeoutExpired:
+                    print("Map saver timed out; the map was not confirmed saved.")
+            node.close_trail()
+            node.destroy_node()
+        stop_process(nav2_process)
+        stop_process(slam_process)
+        if nav2_params is not None:
+            nav2_params.unlink(missing_ok=True)
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+def shutil_which_ros2():
+    from shutil import which
+
+    return which("ros2")
+
+
+if __name__ == "__main__":
+    try:
+        run()
+    except KeyboardInterrupt:
+        print("\nStop requested; cancelling exploration and saving the current map.")
+    except (RuntimeError, subprocess.CalledProcessError, OSError) as error:
+        print(f"NAVI_TEST: {error}", file=sys.stderr)
+        sys.exit(1)
